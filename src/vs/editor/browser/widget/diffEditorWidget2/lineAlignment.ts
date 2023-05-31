@@ -9,12 +9,11 @@ import { IObservable, observableSignalFromEvent, derived } from 'vs/base/common/
 import { autorunWithStore2 } from 'vs/base/common/observableImpl/autorun';
 import { IViewZone } from 'vs/editor/browser/editorBrowser';
 import { CodeEditorWidget } from 'vs/editor/browser/widget/codeEditorWidget';
-import { DiffModel } from 'vs/editor/browser/widget/diffEditorWidget2/diffModel';
+import { DiffMapping, DiffModel } from 'vs/editor/browser/widget/diffEditorWidget2/diffModel';
 import { joinCombine } from 'vs/editor/browser/widget/diffEditorWidget2/utils';
 import { EditorOption } from 'vs/editor/common/config/editorOptions';
 import { LineRange } from 'vs/editor/common/core/lineRange';
 import { Position } from 'vs/editor/common/core/position';
-import { LineRangeMapping } from 'vs/editor/common/diff/linesDiffComputer';
 
 export class ViewZoneAlignment extends Disposable {
 	constructor(
@@ -45,7 +44,7 @@ export class ViewZoneAlignment extends Disposable {
 			origViewZonesChanged.read(reader);
 			modViewZonesChanged.read(reader);
 
-			return computeRangeAlignment(this._originalEditor, this._modifiedEditor, diff.changes, alignmentViewZoneIdsOrig, alignmentViewZoneIdsMod);
+			return computeRangeAlignment(this._originalEditor, this._modifiedEditor, diff.mappings, alignmentViewZoneIdsOrig, alignmentViewZoneIdsMod);
 		});
 
 		function createFakeLinesDiv(): HTMLElement {
@@ -101,46 +100,6 @@ export class ViewZoneAlignment extends Disposable {
 	}
 }
 
-interface AdditionalLineHeightInfo {
-	lineNumber: number;
-	heightInPx: number;
-}
-
-function getAdditionalLineHeights(editor: CodeEditorWidget, viewZonesToIgnore: ReadonlySet<string>): readonly AdditionalLineHeightInfo[] {
-	const viewZoneHeights: { lineNumber: number; heightInPx: number }[] = [];
-	const wrappingZoneHeights: { lineNumber: number; heightInPx: number }[] = [];
-
-	const hasWrapping = editor.getOption(EditorOption.wrappingInfo).wrappingColumn !== -1;
-	const coordinatesConverter = editor._getViewModel()!.coordinatesConverter;
-	if (hasWrapping) {
-		for (let i = 1; i <= editor.getModel()!.getLineCount(); i++) {
-			const lineCount = coordinatesConverter.getModelLineViewLineCount(i);
-			if (lineCount > 1) {
-				wrappingZoneHeights.push({ lineNumber: i, heightInPx: lineCount - 1 });
-			}
-		}
-	}
-
-	for (const w of editor.getWhitespaces()) {
-		if (viewZonesToIgnore.has(w.id)) {
-			continue;
-		}
-		const modelLineNumber = coordinatesConverter.convertViewPositionToModelPosition(
-			new Position(w.afterLineNumber, 1)
-		).lineNumber;
-		viewZoneHeights.push({ lineNumber: modelLineNumber, heightInPx: w.height });
-	}
-
-	const result = joinCombine(
-		viewZoneHeights,
-		wrappingZoneHeights,
-		v => v.lineNumber,
-		(v1, v2) => ({ lineNumber: v1.lineNumber, heightInPx: v1.heightInPx + v2.heightInPx })
-	);
-
-	return result;
-}
-
 interface IRangeAlignment {
 	originalRange: LineRange;
 	modifiedRange: LineRange;
@@ -153,7 +112,7 @@ interface IRangeAlignment {
 function computeRangeAlignment(
 	originalEditor: CodeEditorWidget,
 	modifiedEditor: CodeEditorWidget,
-	diffs: LineRangeMapping[],
+	diffs: readonly DiffMapping[],
 	originalEditorAlignmentViewZones: ReadonlySet<string>,
 	modifiedEditorAlignmentViewZones: ReadonlySet<string>,
 ): IRangeAlignment[] {
@@ -211,7 +170,8 @@ function computeRangeAlignment(
 		}
 	}
 
-	for (const c of diffs) {
+	for (const m of diffs) {
+		const c = m.lineRangeMapping;
 		handleAlignmentsOutsideOfDiffs(c.originalRange.startLineNumber, c.modifiedRange.startLineNumber);
 
 		const originalAdditionalHeight = originalLineHeightOverrides
@@ -232,6 +192,46 @@ function computeRangeAlignment(
 		lastModifiedLineNumber = c.modifiedRange.endLineNumberExclusive;
 	}
 	handleAlignmentsOutsideOfDiffs(Number.MAX_VALUE, Number.MAX_VALUE);
+
+	return result;
+}
+
+interface AdditionalLineHeightInfo {
+	lineNumber: number;
+	heightInPx: number;
+}
+
+function getAdditionalLineHeights(editor: CodeEditorWidget, viewZonesToIgnore: ReadonlySet<string>): readonly AdditionalLineHeightInfo[] {
+	const viewZoneHeights: { lineNumber: number; heightInPx: number }[] = [];
+	const wrappingZoneHeights: { lineNumber: number; heightInPx: number }[] = [];
+
+	const hasWrapping = editor.getOption(EditorOption.wrappingInfo).wrappingColumn !== -1;
+	const coordinatesConverter = editor._getViewModel()!.coordinatesConverter;
+	if (hasWrapping) {
+		for (let i = 1; i <= editor.getModel()!.getLineCount(); i++) {
+			const lineCount = coordinatesConverter.getModelLineViewLineCount(i);
+			if (lineCount > 1) {
+				wrappingZoneHeights.push({ lineNumber: i, heightInPx: lineCount - 1 });
+			}
+		}
+	}
+
+	for (const w of editor.getWhitespaces()) {
+		if (viewZonesToIgnore.has(w.id)) {
+			continue;
+		}
+		const modelLineNumber = coordinatesConverter.convertViewPositionToModelPosition(
+			new Position(w.afterLineNumber, 1)
+		).lineNumber;
+		viewZoneHeights.push({ lineNumber: modelLineNumber, heightInPx: w.height });
+	}
+
+	const result = joinCombine(
+		viewZoneHeights,
+		wrappingZoneHeights,
+		v => v.lineNumber,
+		(v1, v2) => ({ lineNumber: v1.lineNumber, heightInPx: v1.heightInPx + v2.heightInPx })
+	);
 
 	return result;
 }
